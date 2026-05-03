@@ -759,8 +759,9 @@ function bindPatientDetail() {
   if (pv) {
     let t;
     pv.addEventListener('input', () => {
+      obs.exportText = pv.value;
       clearTimeout(t);
-      t = setTimeout(() => { obs.exportText = pv.value; save(); }, 250);
+      t = setTimeout(() => { save(); }, 250);
     });
     pv.addEventListener('blur', () => { obs.exportText = pv.value; save(); });
   }
@@ -774,12 +775,14 @@ function bindPatientDetail() {
   if (libre) {
     let t;
     libre.addEventListener('input', () => {
+      obs.libre = libre.value;
       clearTimeout(t);
       t = setTimeout(() => {
-        obs.libre = libre.value;
         save();
-        const preview = document.getElementById('obs-preview');
-        if (preview) preview.textContent = compileObs(p, day);
+        const preview = document.getElementById('export-preview');
+        if (preview && !(obs.exportText && obs.exportText.trim())) {
+          preview.value = compileObs(p, day);
+        }
       }, 250);
     });
     libre.addEventListener('blur', () => {

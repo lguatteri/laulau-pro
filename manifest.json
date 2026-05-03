@@ -1,0 +1,19 @@
+{
+  "name": "Laulau Pro",
+  "short_name": "Laulau Pro",
+  "description": "Organisation et observations - remplacements en clinique",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#faf7fc",
+  "theme_color": "#9b87b8",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

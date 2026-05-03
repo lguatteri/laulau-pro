@@ -1,4 +1,4 @@
-const CACHE = 'laulau-pro-v6';
+const CACHE = 'laulau-pro-v7';
 const FILES = [
   './',
   './index.html',

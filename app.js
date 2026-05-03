@@ -183,6 +183,7 @@ function normalizePatient(p) {
             J3: !!(p.seen && p.seen.J3), J4: !!(p.seen && p.seen.J4) },
     toSee,
     obs,
+    photoIds: Array.isArray(p.photoIds) ? p.photoIds.filter(x => typeof x === 'string') : [],
   };
 }
 
@@ -292,6 +293,7 @@ function hasObsContent(p, day) {
 
 /* ---------- Render orchestration ---------- */
 function render() {
+  revokeAllURLs();
   const sy = window.scrollY;
   const oldModal = document.getElementById('modal-bg');
   if (oldModal) oldModal.remove();
@@ -390,6 +392,8 @@ function renderPatientCard(p, idxToday) {
   const obsBadge = todayKey && hasObsContent(p, todayKey) ? `<small>📝 obs en cours</small>` : '';
   const sexBadge = p.sex === 'F' ? '♀' : '♂';
   const summaryLine = p.summary ? `<div class="summary">${escapeHtml(p.summary)}</div>` : '';
+  const photoCount = (p.photoIds || []).length;
+  const photoBtn = photoCount > 0 ? `<button class="photo-badge" data-photo-open="${p.id}" title="Voir les photos">📷 ${photoCount}</button>` : '';
   return `
     <div class="patient-card">
       <div class="patient-room">${escapeHtml(p.room)}</div>
@@ -398,6 +402,7 @@ function renderPatientCard(p, idxToday) {
         ${obsBadge}
       </div>
       <div class="patient-actions">
+        ${photoBtn}
         <button class="icon-btn" data-edit="${p.id}" title="Modifier">✎</button>
         <button class="icon-btn" data-delete="${p.id}" title="Supprimer">🗑</button>
       </div>
@@ -454,9 +459,18 @@ function bindHome() {
       const p = STATE.patients.find(x => x.id === el.dataset.delete);
       if (!p) return;
       if (confirm(`Supprimer ${p.name} (ch. ${p.room}) ?`)) {
+        for (const id of (p.photoIds || [])) deletePhotoFromDB(id).catch(() => {});
         STATE.patients = STATE.patients.filter(x => x.id !== p.id);
         save(); render();
       }
+    });
+  });
+  document.querySelectorAll('[data-photo-open]').forEach(el => {
+    el.addEventListener('click', e => {
+      e.stopPropagation();
+      const p = STATE.patients.find(x => x.id === el.dataset.photoOpen);
+      if (!p || !p.photoIds || p.photoIds.length === 0) return;
+      openLightbox(p, p.photoIds[0]);
     });
   });
 }
@@ -648,6 +662,14 @@ function renderPatientDetail() {
     ${p.summary ? `<div class="detail-card summary-card"><h3>Résumé clinique</h3><div class="summary-text">${escapeHtml(p.summary)}</div></div>` : ''}
 
     <div class="detail-card">
+      <h3>Photos (${(p.photoIds || []).length})</h3>
+      <div class="photo-grid" id="patient-photos"></div>
+      <button class="btn btn-outline btn-sm" id="add-photo">+ Ajouter une photo</button>
+      <input type="file" accept="image/*" multiple id="photo-input" style="display:none">
+      <div class="muted-label">Documents uniquement, stockées localement sur l'iPad. Recadrage proposé à l'ajout.</div>
+    </div>
+
+    <div class="detail-card">
       <h3>Observation ${day}</h3>
       <div class="snippet-row">${snippetChips}</div>
       <div class="axes-grid">${axesHTML}</div>
@@ -764,6 +786,22 @@ function bindPatientDetail() {
       obs.libre = libre.value; save();
     });
   }
+
+  const photoInput = document.getElementById('photo-input');
+  const addPhoto = document.getElementById('add-photo');
+  if (addPhoto && photoInput) {
+    addPhoto.addEventListener('click', () => photoInput.click());
+    photoInput.addEventListener('change', async () => {
+      const files = Array.from(photoInput.files || []);
+      photoInput.value = '';
+      for (const f of files) await addPhotoFlow(p, f);
+      render();
+    });
+  }
+  const photoGrid = document.getElementById('patient-photos');
+  if (photoGrid && p.photoIds && p.photoIds.length > 0) {
+    loadThumbsInto(photoGrid, p.photoIds, (id) => openLightbox(p, id));
+  }
 }
 
 /* ---------- Export ---------- */
@@ -859,6 +897,301 @@ function toast(msg) {
   el.textContent = msg;
   document.body.appendChild(el);
   setTimeout(() => el.remove(), 1800);
+}
+
+/* ---------- Photo storage (IndexedDB) ---------- */
+const PHOTO_DB_NAME = 'laulau-photos';
+const PHOTO_DB_VERSION = 1;
+const PHOTO_STORE = 'photos';
+let _photoDB = null;
+
+function openPhotoDB() {
+  if (_photoDB) return Promise.resolve(_photoDB);
+  return new Promise((res, rej) => {
+    const req = indexedDB.open(PHOTO_DB_NAME, PHOTO_DB_VERSION);
+    req.onupgradeneeded = e => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(PHOTO_STORE)) db.createObjectStore(PHOTO_STORE, { keyPath: 'id' });
+    };
+    req.onsuccess = e => { _photoDB = e.target.result; res(_photoDB); };
+    req.onerror = e => rej(e.target.error);
+  });
+}
+async function savePhoto(id, blob, patientId) {
+  const db = await openPhotoDB();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(PHOTO_STORE, 'readwrite');
+    tx.objectStore(PHOTO_STORE).put({ id, blob, patientId, createdAt: Date.now() });
+    tx.oncomplete = () => res();
+    tx.onerror = () => rej(tx.error);
+  });
+}
+async function loadPhoto(id) {
+  const db = await openPhotoDB();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(PHOTO_STORE, 'readonly');
+    const req = tx.objectStore(PHOTO_STORE).get(id);
+    req.onsuccess = () => res(req.result || null);
+    req.onerror = () => rej(req.error);
+  });
+}
+async function deletePhotoFromDB(id) {
+  const db = await openPhotoDB();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(PHOTO_STORE, 'readwrite');
+    tx.objectStore(PHOTO_STORE).delete(id);
+    tx.oncomplete = () => res();
+    tx.onerror = () => rej(tx.error);
+  });
+}
+
+const ACTIVE_URLS = new Set();
+function blobURL(blob) { const u = URL.createObjectURL(blob); ACTIVE_URLS.add(u); return u; }
+function revokeAllURLs() { for (const u of ACTIVE_URLS) URL.revokeObjectURL(u); ACTIVE_URLS.clear(); }
+
+/* ---------- Image processing ---------- */
+function loadImageFromBlob(blob) {
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => res({ img, url });
+    img.onerror = e => { URL.revokeObjectURL(url); rej(e); };
+    img.src = url;
+  });
+}
+function compressImage(img, crop) {
+  const sx = crop ? crop.x : 0;
+  const sy = crop ? crop.y : 0;
+  const sw = crop ? crop.w : img.naturalWidth;
+  const sh = crop ? crop.h : img.naturalHeight;
+  const MAX = 1400;
+  let dw = sw, dh = sh;
+  if (Math.max(sw, sh) > MAX) {
+    if (sw >= sh) { dw = MAX; dh = Math.round(sh * MAX / sw); }
+    else { dh = MAX; dw = Math.round(sw * MAX / sh); }
+  }
+  const canvas = document.createElement('canvas');
+  canvas.width = dw; canvas.height = dh;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, sx, sy, sw, sh, 0, 0, dw, dh);
+  return new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.82));
+}
+
+/* ---------- Cropper ---------- */
+function showCropper(img, srcURL) {
+  return new Promise((resolve) => {
+    const bg = document.createElement('div');
+    bg.className = 'cropper-bg';
+    bg.innerHTML = `
+      <div class="cropper-stage" id="crop-stage">
+        <img id="crop-img" alt="">
+        <div class="cropper-rect" id="crop-rect">
+          <div class="cropper-handle nw" data-h="nw"></div>
+          <div class="cropper-handle ne" data-h="ne"></div>
+          <div class="cropper-handle sw" data-h="sw"></div>
+          <div class="cropper-handle se" data-h="se"></div>
+        </div>
+      </div>
+      <div class="cropper-actions">
+        <button class="btn btn-outline" id="crop-cancel">Annuler</button>
+        <button class="btn btn-ghost" id="crop-skip">Sans recadrer</button>
+        <button class="btn btn-primary" id="crop-confirm">Recadrer</button>
+      </div>`;
+    document.body.appendChild(bg);
+    const stage = bg.querySelector('#crop-stage');
+    const dispImg = bg.querySelector('#crop-img');
+    const rect = bg.querySelector('#crop-rect');
+    dispImg.src = srcURL;
+
+    const init = () => {
+      const stageBox = stage.getBoundingClientRect();
+      const imgBox = dispImg.getBoundingClientRect();
+      const offX = imgBox.left - stageBox.left;
+      const offY = imgBox.top - stageBox.top;
+      const w = imgBox.width * 0.8;
+      const h = imgBox.height * 0.8;
+      rect.style.left = (offX + (imgBox.width - w) / 2) + 'px';
+      rect.style.top = (offY + (imgBox.height - h) / 2) + 'px';
+      rect.style.width = w + 'px';
+      rect.style.height = h + 'px';
+    };
+    if (dispImg.complete && dispImg.naturalWidth) requestAnimationFrame(init);
+    else dispImg.onload = () => requestAnimationFrame(init);
+
+    let action = null;
+    let start = { x: 0, y: 0 };
+    let initR = null;
+
+    const onDown = (e) => {
+      const t = e.target;
+      action = t.dataset.h ? ('rs-' + t.dataset.h) : 'mv';
+      start = { x: e.clientX, y: e.clientY };
+      initR = { l: rect.offsetLeft, t: rect.offsetTop, w: rect.offsetWidth, h: rect.offsetHeight };
+      rect.setPointerCapture && rect.setPointerCapture(e.pointerId);
+      e.preventDefault();
+    };
+    const onMove = (e) => {
+      if (!action) return;
+      const dx = e.clientX - start.x, dy = e.clientY - start.y;
+      let l = initR.l, t = initR.t, w = initR.w, h = initR.h;
+      if (action === 'mv') { l += dx; t += dy; }
+      else if (action === 'rs-nw') { l += dx; t += dy; w -= dx; h -= dy; }
+      else if (action === 'rs-ne') { t += dy; w += dx; h -= dy; }
+      else if (action === 'rs-sw') { l += dx; w -= dx; h += dy; }
+      else if (action === 'rs-se') { w += dx; h += dy; }
+      const stageBox = stage.getBoundingClientRect();
+      const imgBox = dispImg.getBoundingClientRect();
+      const minL = imgBox.left - stageBox.left;
+      const minT = imgBox.top - stageBox.top;
+      const maxL = minL + imgBox.width;
+      const maxT = minT + imgBox.height;
+      const minSize = 60;
+      if (w < minSize) { if (action === 'rs-nw' || action === 'rs-sw') l = initR.l + initR.w - minSize; w = minSize; }
+      if (h < minSize) { if (action === 'rs-nw' || action === 'rs-ne') t = initR.t + initR.h - minSize; h = minSize; }
+      if (l < minL) { if (action === 'mv') l = minL; else { w += (l - minL); l = minL; } }
+      if (t < minT) { if (action === 'mv') t = minT; else { h += (t - minT); t = minT; } }
+      if (l + w > maxL) { if (action === 'mv') l = maxL - w; else w = maxL - l; }
+      if (t + h > maxT) { if (action === 'mv') t = maxT - h; else h = maxT - t; }
+      rect.style.left = l + 'px'; rect.style.top = t + 'px';
+      rect.style.width = w + 'px'; rect.style.height = h + 'px';
+    };
+    const onUp = (e) => {
+      action = null;
+      try { rect.releasePointerCapture && rect.releasePointerCapture(e.pointerId); } catch {}
+    };
+    rect.addEventListener('pointerdown', onDown);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+
+    const cleanup = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      bg.remove();
+    };
+    bg.querySelector('#crop-cancel').addEventListener('click', () => { cleanup(); resolve({ cancelled: true }); });
+    bg.querySelector('#crop-skip').addEventListener('click', () => { cleanup(); resolve({ crop: null }); });
+    bg.querySelector('#crop-confirm').addEventListener('click', () => {
+      const stageBox = stage.getBoundingClientRect();
+      const imgBox = dispImg.getBoundingClientRect();
+      const offX = imgBox.left - stageBox.left;
+      const offY = imgBox.top - stageBox.top;
+      const scale = img.naturalWidth / imgBox.width;
+      const cropPx = {
+        x: Math.max(0, Math.round((rect.offsetLeft - offX) * scale)),
+        y: Math.max(0, Math.round((rect.offsetTop - offY) * scale)),
+        w: Math.round(rect.offsetWidth * scale),
+        h: Math.round(rect.offsetHeight * scale),
+      };
+      cropPx.w = Math.min(cropPx.w, img.naturalWidth - cropPx.x);
+      cropPx.h = Math.min(cropPx.h, img.naturalHeight - cropPx.y);
+      cleanup();
+      resolve({ crop: cropPx });
+    });
+  });
+}
+
+/* ---------- Add photo flow ---------- */
+async function addPhotoFlow(patient, file) {
+  if (!file || !file.type || !file.type.startsWith('image/')) return;
+  let temp = null;
+  try {
+    temp = await loadImageFromBlob(file);
+    const result = await showCropper(temp.img, temp.url);
+    if (result.cancelled) return;
+    const blob = await compressImage(temp.img, result.crop);
+    if (!blob) { toast('Compression échouée'); return; }
+    const id = uid();
+    await savePhoto(id, blob, patient.id);
+    if (!Array.isArray(patient.photoIds)) patient.photoIds = [];
+    patient.photoIds.push(id);
+    save();
+  } catch (e) {
+    console.error('photo error', e);
+    toast(`Erreur : ${e.message || e}`);
+  } finally {
+    if (temp && temp.url) URL.revokeObjectURL(temp.url);
+  }
+}
+
+/* ---------- Lightbox ---------- */
+async function openLightbox(patient, startId) {
+  let ids = (patient.photoIds || []).slice();
+  if (ids.length === 0) return;
+  let idx = ids.indexOf(startId);
+  if (idx < 0) idx = 0;
+  const bg = document.createElement('div');
+  bg.className = 'lightbox-bg';
+  bg.innerHTML = `
+    <button class="lightbox-close" id="lb-close">×</button>
+    <div class="lightbox-img-wrap"><img id="lb-img" alt=""></div>
+    <div class="lightbox-actions">
+      <button class="lb-btn" id="lb-prev">‹</button>
+      <span class="lb-pos" id="lb-pos"></span>
+      <button class="lb-btn lb-del" id="lb-del">🗑</button>
+      <button class="lb-btn" id="lb-next">›</button>
+    </div>`;
+  document.body.appendChild(bg);
+  const lbImg = bg.querySelector('#lb-img');
+  let currentURL = null;
+  async function show(i) {
+    if (currentURL) { URL.revokeObjectURL(currentURL); ACTIVE_URLS.delete(currentURL); currentURL = null; }
+    const photo = await loadPhoto(ids[i]);
+    if (!photo) { lbImg.alt = 'Photo introuvable'; return; }
+    currentURL = blobURL(photo.blob);
+    lbImg.src = currentURL;
+    bg.querySelector('#lb-pos').textContent = `${i + 1} / ${ids.length}`;
+  }
+  show(idx);
+  bg.querySelector('#lb-prev').addEventListener('click', () => { idx = (idx - 1 + ids.length) % ids.length; show(idx); });
+  bg.querySelector('#lb-next').addEventListener('click', () => { idx = (idx + 1) % ids.length; show(idx); });
+  bg.querySelector('#lb-close').addEventListener('click', cleanup);
+  bg.querySelector('#lb-del').addEventListener('click', async () => {
+    if (!confirm('Supprimer cette photo ?')) return;
+    const delId = ids[idx];
+    await deletePhotoFromDB(delId);
+    patient.photoIds = (patient.photoIds || []).filter(x => x !== delId);
+    ids = patient.photoIds.slice();
+    save();
+    if (ids.length === 0) { cleanup(); render(); return; }
+    if (idx >= ids.length) idx = ids.length - 1;
+    await show(idx);
+    render();
+  });
+
+  // Swipe support
+  let sx = null;
+  bg.addEventListener('pointerdown', e => {
+    if (e.target.closest('.lightbox-actions') || e.target.closest('.lightbox-close')) return;
+    sx = e.clientX;
+  });
+  bg.addEventListener('pointerup', e => {
+    if (sx === null) return;
+    const dx = e.clientX - sx;
+    sx = null;
+    if (Math.abs(dx) < 40) return;
+    if (dx < 0) { idx = (idx + 1) % ids.length; show(idx); }
+    else { idx = (idx - 1 + ids.length) % ids.length; show(idx); }
+  });
+
+  function cleanup() {
+    if (currentURL) URL.revokeObjectURL(currentURL);
+    bg.remove();
+  }
+}
+
+async function loadThumbsInto(container, ids, onClick) {
+  for (const id of ids) {
+    const photo = await loadPhoto(id);
+    if (!photo) continue;
+    const url = blobURL(photo.blob);
+    const div = document.createElement('div');
+    div.className = 'photo-thumb';
+    div.innerHTML = `<img src="${url}" alt="">`;
+    div.addEventListener('click', () => onClick(id));
+    container.appendChild(div);
+  }
 }
 
 /* ---------- Boot ---------- */

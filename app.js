@@ -776,14 +776,12 @@ function bindPatientDetail() {
     let t;
     libre.addEventListener('input', () => {
       obs.libre = libre.value;
+      const preview = document.getElementById('export-preview');
+      if (preview && !(obs.exportText && obs.exportText.trim())) {
+        preview.value = compileObs(p, day);
+      }
       clearTimeout(t);
-      t = setTimeout(() => {
-        save();
-        const preview = document.getElementById('export-preview');
-        if (preview && !(obs.exportText && obs.exportText.trim())) {
-          preview.value = compileObs(p, day);
-        }
-      }, 250);
+      t = setTimeout(() => { save(); }, 250);
     });
     libre.addEventListener('blur', () => {
       obs.libre = libre.value; save();

@@ -105,7 +105,7 @@ const STATE = {
   startDate: null,
   patients: [],
   view: 'home',
-  currentUnit: 'RDC',
+  currentUnit: 'today',
   currentPatientId: null,
   currentDayIdx: 0,
   modal: null,
@@ -359,24 +359,106 @@ function renderHeader() {
 function renderHome() {
   const idxToday = todayDayIdx();
   const counts = UNITS.reduce((acc, u) => { acc[u] = STATE.patients.filter(p => p.unit === u).length; return acc; }, {});
-  const tabs = UNITS.map(u => `
+  const todayKey = (idxToday >= 0 && idxToday <= 3) ? DAYS[idxToday] : null;
+  const remaining = todayKey ? STATE.patients.filter(p => p.toSee[todayKey] && !p.seen[todayKey]).length : 0;
+
+  const todayTab = `<div class="unit-tab today-tab ${STATE.currentUnit === 'today' ? 'active' : ''}" data-unit="today">
+    <span>Aujourd'hui</span>
+    <span class="count">${todayKey ? (remaining > 0 ? remaining + ' à voir' : '✓ à jour') : 'hors période'}</span>
+  </div>`;
+  const unitTabs = UNITS.map(u => `
     <div class="unit-tab ${u === STATE.currentUnit ? 'active' : ''}" data-unit="${u}">
       <span>${u}</span><span class="count">${counts[u]} pt${counts[u] > 1 ? 's' : ''}</span>
     </div>`).join('');
-  const patients = STATE.patients
-    .filter(p => p.unit === STATE.currentUnit)
-    .sort((a, b) => a.room.localeCompare(b.room, 'fr', { numeric: true }));
-  const list = patients.length === 0
-    ? `<div class="empty">Aucun patient dans cette unité.<br><br><button class="btn btn-primary" id="add-empty">+ Ajouter un patient</button></div>`
-    : `<div class="patient-list">${patients.map(p => renderPatientCard(p, idxToday)).join('')}</div>`;
+
+  const list = STATE.currentUnit === 'today' ? renderTodayList(idxToday) : renderUnitList(STATE.currentUnit, idxToday);
+
   return `
-    <div class="unit-tabs">${tabs}</div>
+    <div class="unit-tabs">${todayTab}${unitTabs}</div>
     <div class="toolbar">
       <div class="toolbar-left"><button class="btn btn-primary" id="btn-add">+ Ajouter patient</button></div>
       <div class="toolbar-right"><button class="btn btn-ghost" id="btn-export">📋 Export du jour</button></div>
     </div>
     ${list}
   `;
+}
+
+function renderUnitList(unit, idxToday) {
+  const patients = STATE.patients
+    .filter(p => p.unit === unit)
+    .sort((a, b) => a.room.localeCompare(b.room, 'fr', { numeric: true }));
+  if (patients.length === 0) {
+    return `<div class="empty">Aucun patient dans cette unité.<br><br><button class="btn btn-primary" id="add-empty">+ Ajouter un patient</button></div>`;
+  }
+  return `<div class="patient-list">${patients.map(p => renderPatientCard(p, idxToday)).join('')}</div>`;
+}
+
+function renderTodayList(idxToday) {
+  if (idxToday < 0 || idxToday > 3) {
+    return `<div class="empty">Hors période du rempla.<br><br>Bascule sur une unité pour voir tous tes patients, ou ajuste la date du J1 dans les Réglages (pastille en haut à droite).</div>`;
+  }
+  const today = DAYS[idxToday];
+  const toSee = STATE.patients.filter(p => p.toSee[today] && !p.seen[today]);
+  const done = STATE.patients.filter(p => p.toSee[today] && p.seen[today]);
+
+  if (toSee.length === 0 && done.length === 0) {
+    return `<div class="empty">Aucun patient marqué « à voir » aujourd'hui.<br><br>Ouvre une unité, et coche « À voir ${today} » sur les patients que tu dois voir.</div>`;
+  }
+
+  const groupedToSee = {};
+  toSee.forEach(p => { (groupedToSee[p.unit] = groupedToSee[p.unit] || []).push(p); });
+
+  let html = '';
+  if (toSee.length > 0) {
+    const sections = UNITS.map(u => {
+      const arr = groupedToSee[u];
+      if (!arr || arr.length === 0) return '';
+      arr.sort((a, b) => a.room.localeCompare(b.room, 'fr', { numeric: true }));
+      return `<div class="today-unit">
+        <div class="today-unit-title">${u} <span class="today-unit-count">${arr.length}</span></div>
+        ${arr.map(p => renderTodayCard(p, today)).join('')}
+      </div>`;
+    }).filter(Boolean).join('');
+    html += `<div class="today-section"><h3 class="today-h">À voir (${toSee.length})</h3>${sections}</div>`;
+  } else {
+    html += `<div class="today-section"><div class="empty">Tu as vu tout le monde 🎉</div></div>`;
+  }
+
+  if (done.length > 0) {
+    done.sort((a, b) => {
+      if (a.unit !== b.unit) return UNITS.indexOf(a.unit) - UNITS.indexOf(b.unit);
+      return a.room.localeCompare(b.room, 'fr', { numeric: true });
+    });
+    html += `<div class="today-section"><h3 class="today-h muted">Déjà vu·e·s aujourd'hui (${done.length})</h3>
+      <div class="today-done">${done.map(p => renderTodayCard(p, today)).join('')}</div>
+    </div>`;
+  }
+
+  return html;
+}
+
+function renderTodayCard(p, today) {
+  const sexBadge = p.sex === 'F' ? '♀' : '♂';
+  const summaryLine = p.summary ? `<div class="summary">${escapeHtml(p.summary)}</div>` : '';
+  const isSeen = p.seen[today];
+  const photoCount = (p.photoIds || []).length;
+  const photoBtn = photoCount > 0 ? `<button class="photo-badge" data-photo-open="${p.id}">📷 ${photoCount}</button>` : '';
+  return `
+    <div class="today-card ${isSeen ? 'seen' : ''}">
+      <div class="today-card-main" data-open="${p.id}">
+        <div class="today-room">${escapeHtml(p.room)}</div>
+        <div class="today-info">
+          <div class="today-name">${escapeHtml(p.name)} <span class="sex-mini">${sexBadge}</span></div>
+          ${summaryLine}
+        </div>
+      </div>
+      <div class="today-actions">
+        ${photoBtn}
+        <button class="btn ${isSeen ? 'btn-primary' : 'btn-outline'} btn-sm" data-quick-seen="${p.id}" data-day="${today}">
+          ${isSeen ? '✓ ' + s(p.sex || 'M', 'Vu', 'Vue') : 'Marquer vu'}
+        </button>
+      </div>
+    </div>`;
 }
 
 function renderPatientCard(p, idxToday) {
@@ -476,11 +558,21 @@ function bindHome() {
       openLightbox(p, p.photoIds[0]);
     });
   });
+  document.querySelectorAll('[data-quick-seen]').forEach(el => {
+    el.addEventListener('click', e => {
+      e.stopPropagation();
+      const p = STATE.patients.find(x => x.id === el.dataset.quickSeen);
+      if (!p) return;
+      p.seen[el.dataset.day] = !p.seen[el.dataset.day];
+      save(); render();
+    });
+  });
 }
 
 /* ---------- Patient modal ---------- */
 function openAddPatient() {
-  STATE.modal = { kind: 'patient', patient: { id: null, unit: STATE.currentUnit, room: '', name: '', sex: 'M', summary: '' } };
+  const defaultUnit = UNITS.includes(STATE.currentUnit) ? STATE.currentUnit : 'RDC';
+  STATE.modal = { kind: 'patient', patient: { id: null, unit: defaultUnit, room: '', name: '', sex: 'M', summary: '' } };
   render();
 }
 function openEditPatient(id) {

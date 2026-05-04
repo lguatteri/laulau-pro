@@ -315,6 +315,8 @@ function render() {
     root.innerHTML = renderHeader() + renderHome();
     bindHome();
   }
+  const sb = document.getElementById('open-settings');
+  if (sb) sb.addEventListener('click', () => { STATE.modal = { kind: 'settings' }; render(); });
   if (STATE.modal) renderModal();
   if (viewKey === lastViewKey) window.scrollTo(0, sy);
   else window.scrollTo(0, 0);
@@ -345,11 +347,12 @@ function bindSetup() {
 /* ---------- Header ---------- */
 function renderHeader() {
   const idx = todayDayIdx();
-  let badge;
-  if (idx < 0) badge = `<span class="day-badge idle">Démarre ${formatDateShort(dateForDayIdx(0))}</span>`;
-  else if (idx > 3) badge = `<span class="day-badge idle">Rempla terminé</span>`;
-  else badge = `<span class="day-badge">${DAYS[idx]} · ${formatDateShort(dateForDayIdx(idx))}</span>`;
-  return `<div class="header"><h1>Laulau <span class="accent">Pro</span></h1>${badge}</div>`;
+  let label;
+  if (idx < 0) label = `Démarre ${formatDateShort(dateForDayIdx(0))}`;
+  else if (idx > 3) label = `Rempla terminé`;
+  else label = `${DAYS[idx]} · ${formatDateShort(dateForDayIdx(idx))}`;
+  const cls = (idx < 0 || idx > 3) ? 'day-badge idle' : 'day-badge';
+  return `<div class="header"><h1>Laulau <span class="accent">Pro</span></h1><button class="${cls}" id="open-settings" title="Réglages">${label} ⚙</button></div>`;
 }
 
 /* ---------- Home ---------- */
@@ -488,9 +491,44 @@ function openEditPatient(id) {
 }
 function closeModal() { STATE.modal = null; render(); }
 
+function renderSettingsModal() {
+  const wrap = document.createElement('div');
+  wrap.className = 'modal-bg';
+  wrap.id = 'modal-bg';
+  wrap.innerHTML = `
+    <div class="modal" role="dialog">
+      <h3>Réglages</h3>
+      <div class="field">
+        <label>Date du J1 (1er jour du rempla)</label>
+        <input id="m-startdate" type="date" value="${STATE.startDate || ''}">
+        <div class="muted-label" style="margin-top:8px; line-height:1.4;">
+          Modifier la date <strong>ne supprime aucune donnée</strong>. Les emplacements J1, J2, J3, J4 conservent leur contenu — seules les dates affichées se décalent.<br><br>
+          Si tu décales d'un jour vers l'avant, vérifie après coup que le contenu de chaque jour correspond bien à sa nouvelle date (un J2 résiduel d'avant peut traîner).
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-outline" id="m-cancel">Fermer</button>
+        <button class="btn btn-primary" id="m-savedate">Enregistrer</button>
+      </div>
+    </div>`;
+  document.body.appendChild(wrap);
+  wrap.addEventListener('click', e => { if (e.target === wrap) closeModal(); });
+  document.getElementById('m-cancel').addEventListener('click', closeModal);
+  document.getElementById('m-savedate').addEventListener('click', () => {
+    const v = document.getElementById('m-startdate').value;
+    if (!v) { toast('Date requise'); return; }
+    STATE.startDate = v;
+    save();
+    STATE.modal = null;
+    render();
+    toast('Date mise à jour');
+  });
+}
+
 function renderModal() {
   const m = STATE.modal;
   if (!m) return;
+  if (m.kind === 'settings') return renderSettingsModal();
   const wrap = document.createElement('div');
   wrap.className = 'modal-bg';
   wrap.id = 'modal-bg';

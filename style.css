@@ -76,12 +76,17 @@ input, select, textarea {
 .day-badge {
   background: var(--primary);
   color: white;
-  padding: 6px 12px;
+  padding: 8px 14px;
   border-radius: 999px;
   font-size: 14px;
   font-weight: 600;
   white-space: nowrap;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  min-height: 36px;
 }
+.day-badge:active { transform: scale(0.96); }
 .day-badge.idle { background: var(--text-muted); }
 
 /* ---------- Setup ---------- */

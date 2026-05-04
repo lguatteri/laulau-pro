@@ -1,5 +1,6 @@
 'use strict';
 
+const APP_VERSION = 'v12';
 const STORAGE_KEY = 'laulau-pro';
 const UNITS = ['RDC', '1er', '2e', '4e', 'HDJ'];
 const DAYS = ['J1', 'J2', 'J3', 'J4'];
@@ -594,13 +595,21 @@ function renderSettingsModal() {
         <label>Date du J1 (1er jour du rempla)</label>
         <input id="m-startdate" type="date" value="${STATE.startDate || ''}">
         <div class="muted-label" style="margin-top:8px; line-height:1.4;">
-          Modifier la date <strong>ne supprime aucune donnée</strong>. Les emplacements J1, J2, J3, J4 conservent leur contenu — seules les dates affichées se décalent.<br><br>
-          Si tu décales d'un jour vers l'avant, vérifie après coup que le contenu de chaque jour correspond bien à sa nouvelle date (un J2 résiduel d'avant peut traîner).
+          Modifier la date <strong>ne supprime aucune donnée</strong>. Les emplacements J1, J2, J3, J4 conservent leur contenu — seules les dates affichées se décalent.
         </div>
       </div>
+
+      <div class="field">
+        <label>Mise à jour de l'app</label>
+        <div class="muted-label" style="margin-bottom:8px; line-height:1.4;">
+          Version actuelle : <strong>${APP_VERSION}</strong>. Sur iPad la PWA peut rester bloquée sur une vieille version. Ce bouton purge le cache + recharge.
+        </div>
+        <button class="btn btn-outline btn-block" id="m-forceupdate">↻ Forcer la mise à jour</button>
+      </div>
+
       <div class="modal-actions">
         <button class="btn btn-outline" id="m-cancel">Fermer</button>
-        <button class="btn btn-primary" id="m-savedate">Enregistrer</button>
+        <button class="btn btn-primary" id="m-savedate">Enregistrer la date</button>
       </div>
     </div>`;
   document.body.appendChild(wrap);
@@ -614,6 +623,22 @@ function renderSettingsModal() {
     STATE.modal = null;
     render();
     toast('Date mise à jour');
+  });
+  document.getElementById('m-forceupdate').addEventListener('click', async () => {
+    if (!confirm('Vider le cache et recharger l\'app ? Tes patients et photos sont conservés.')) return;
+    try {
+      if ('caches' in window) {
+        const names = await caches.keys();
+        await Promise.all(names.map(n => caches.delete(n)));
+      }
+      if ('serviceWorker' in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map(r => r.unregister()));
+      }
+    } catch (e) {
+      console.error(e);
+    }
+    location.reload();
   });
 }
 
